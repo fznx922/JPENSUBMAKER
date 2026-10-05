@@ -77,6 +77,11 @@ class WhisperEngine:
         m = self.model_id.lower()
         return not any(x in m for x in ("turbo", "kotoba", "distil", ".en"))
 
+    @property
+    def display_name(self) -> str:
+        from pathlib import Path
+        return Path(self.model_id).name.replace("--", "/") if Path(self.model_id).is_dir() else self.model_id
+
     def load(self):
         if self._model is not None:
             return self._model
@@ -87,7 +92,7 @@ class WhisperEngine:
         compute = self.compute_type
         if self.device == "cpu" and "float16" in compute:
             compute = "int8"
-        self.log(f"Loading speech model {self.model_id} ({self.device}, {compute}) — first run downloads it…")
+        self.log(f"Loading speech model {self.display_name} ({self.device}, {compute})…")
         try:
             self._model = WhisperModel(self.model_id, device=self.device, compute_type=compute)
         except (RuntimeError, ValueError) as e:

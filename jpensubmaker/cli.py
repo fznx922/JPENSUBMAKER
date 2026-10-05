@@ -12,7 +12,94 @@ from pathlib import Path
 from . import __version__
 
 
+def _quiet_streams() -> None:
+    """The windowed .exe has no console: sys.stdout/stderr are None and any print would crash. Send them to a log."""
+    if sys.stdout is None or sys.stderr is None:
+        from .paths import logs_dir
+        f = open(logs_dir() / "app.log", "a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stdout or f
+        sys.stderr = sys.stderr or f
+
+
+def selftest() -> int:
+    """Checks that a build has everything it needs (used by CI on the packaged .exe)."""
+    import json
+    import traceback
+    results: dict[str, str] = {}
+
+    def check(name, fn, critical=True):
+        try:
+            results[name] = "ok " + str(fn() or "")
+        except Exception as e:  # noqa: BLE001
+            results[name] = ("FAIL " if critical else "warn ") + f"{type(e).__name__}: {e}"
+            traceback.print_exc()
+
+    def qt():
+        import os
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        from .gui.app import MainWindow  # noqa: F401 — imports every GUI module
+        QApplication.instance() or QApplication([])
+        from .gui.icons import app_icon
+        return f"{len(app_icon().availableSizes())} icon sizes"
+
+    def whisper():
+        import numpy as np
+        import ctranslate2
+        from .hardware import prepare_cuda
+        prepare_cuda()
+        from faster_whisper.vad import VadOptions, get_speech_timestamps
+        get_speech_timestamps(np.zeros(16000, dtype=np.float32), VadOptions())
+        return f"ctranslate2 {ctranslate2.__version__}, {ctranslate2.get_cuda_device_count()} CUDA device(s)"
+
+    def cuda_libs():
+        import ctypes
+        import sys as _s
+        from .hardware import prepare_cuda
+        prepare_cuda()
+        if _s.platform != "win32":
+            return "skipped (not Windows)"
+        for dll in ("cublas64_12.dll", "cublasLt64_12.dll", "cudnn64_9.dll", "cudnn_ops64_9.dll", "cudnn_cnn64_9.dll"):
+            ctypes.WinDLL(dll)
+        return "cuBLAS + cuDNN load"
+
+    def ffmpeg():
+        import subprocess
+        from .media import ffmpeg_exe
+        out = subprocess.run([ffmpeg_exe(), "-version"], capture_output=True, text=True).stdout
+        return out.splitlines()[0][:40]
+
+    def ytdlp():
+        import yt_dlp
+        from yt_dlp.extractor import gen_extractor_classes
+        names = {ie.IE_NAME for ie in gen_extractor_classes()}
+        assert {"youtube", "dailymotion"} <= names, "extractors missing"
+        return yt_dlp.version.__version__
+
+    def tls():
+        import requests
+        return requests.get("https://huggingface.co/api/models/Systran/faster-whisper-large-v3", timeout=20).status_code
+
+    def audio():
+        from .realtime import _soundcard, list_devices
+        _soundcard()                                      # raises if the capture backend cannot load
+        return f"{len(list_devices('loopback'))} loopback / {len(list_devices('mic'))} mic devices"
+
+    check("gui", qt)
+    check("speech engine", whisper)
+    check("cuda libraries", cuda_libs)
+    check("ffmpeg", ffmpeg)
+    check("yt-dlp", ytdlp)
+    check("audio capture", audio, critical=False)
+    check("https", tls, critical=False)
+    print(json.dumps(results, indent=2))
+    return 1 if any(v.startswith("FAIL") for v in results.values()) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    _quiet_streams()
+    if argv is None and "--selftest" in sys.argv[1:]:
+        return selftest()
     ap = argparse.ArgumentParser(prog="jpensubmaker", description="Japanese → English subtitle generator")
     ap.add_argument("inputs", nargs="*", help="video/audio files, folders, or links")
     ap.add_argument("--cli", action="store_true", help="run without the GUI")
@@ -25,7 +112,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", help="output folder (default: beside each video)")
     ap.add_argument("--context", help="what the video is about, names… (helps ASR and translation)")
     ap.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    ap.add_argument("--selftest", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
+    if args.selftest:
+        return selftest()
 
     if not args.cli:
         from .gui.app import run

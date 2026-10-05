@@ -1,0 +1,101 @@
+name: Windows app
+
+# Builds JPENSubMaker-Setup.exe (installer) and JPENSubMaker-portable.zip, self-tests the packaged app,
+# and publishes both on the release for the current version (v<__version__>).
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+    paths-ignore: ["**.md", "docs/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller pytest
+
+      - name: Tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
+      - name: Read version
+        id: ver
+        shell: bash
+        run: echo "version=$(python -c 'import jpensubmaker; print(jpensubmaker.__version__)')" >> "$GITHUB_OUTPUT"
+
+      - name: Build app (PyInstaller)
+        run: pyinstaller packaging/jpensubmaker.spec --noconfirm --clean
+
+      - name: Self-test the packaged app
+        run: dist\JPENSubMaker\jpensub-cli.exe --selftest
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          }
+          & $iscc packaging\installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Portable zip
+        working-directory: dist
+        run: 7z a -tzip -mx=5 JPENSubMaker-portable.zip JPENSubMaker
+
+      - name: Sizes
+        shell: pwsh
+        run: Get-ChildItem dist -File | Format-Table Name, @{n='MB';e={[math]::Round($_.Length/1MB)}}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JPENSubMaker-Setup
+          path: dist/JPENSubMaker-Setup.exe
+          retention-days: 14
+          compression-level: 0
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: JPEN SubMaker ${{ steps.ver.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: |
+            dist/JPENSubMaker-Setup.exe
+            dist/JPENSubMaker-portable.zip
+          body: |
+            **Download `JPENSubMaker-Setup.exe`, run it, done.** No Python, no extra installs.
+
+            On first start the app picks settings for your GPU and offers to download the AI models
+            (≈12 GB once: speech model, translation engine, translation model). Skip it and they download
+            the first time they are needed.
+
+            `JPENSubMaker-portable.zip` is the same app without an installer: unzip anywhere and run `JPENSubMaker.exe`.
+
+            Windows 10/11 64-bit · NVIDIA GPU recommended (works on CPU, slowly).
+            Built from ${{ github.sha }}.

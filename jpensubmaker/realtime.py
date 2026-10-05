@@ -165,21 +165,27 @@ class LiveTranslator:
 
     # ------------------------------------------------------------------ processing
     def _load(self) -> None:
+        from .pipeline import can_whisper_translate, llm_config, prepare_asr, prepare_llm
         s = self.s
-        self.on_status(f"Loading {s.live_asr_model}…")
-        self._engine = make_engine(s.live_asr_model, device=s.device, compute_type=s.live_compute_type,
-                                   log=self.on_status)
-        self._engine.load()
+        stopped = self._stop.is_set
+
+        def status(frac: float, msg: str) -> None:
+            self.on_status(msg)
+
+        model = s.live_asr_model
+        if s.live_translator == "whisper" and not can_whisper_translate(model):
+            self.on_status(f"{model} cannot translate — using large-v3 instead")
+            model = "large-v3"
+        url = None
         if s.live_translator in ("ollama", "openai"):
-            from .pipeline import llm_config
+            url = prepare_llm(s, live=True, progress=status, cancelled=stopped, log=self.on_status)
+        path = prepare_asr(model, progress=status, cancelled=stopped)
+        self.on_status(f"Loading {model}…")
+        self._engine = make_engine(path, device=s.device, compute_type=s.live_compute_type, log=self.on_status)
+        self._engine.load()
+        if url is not None:
             from .translate import LLMClient
-            self._llm = LLMClient(llm_config(s, live=True), log=self.on_status)
-        if s.live_translator == "whisper" and not getattr(self._engine, "can_translate", False):
-            self.on_status(f"{s.live_asr_model} cannot translate — loading large-v3 instead")
-            self._engine.close()
-            self._engine = make_engine("large-v3", device=s.device, compute_type=s.live_compute_type,
-                                       log=self.on_status)
-            self._engine.load()
+            self._llm = LLMClient(llm_config(s, live=True, url=url), log=self.on_status)
 
     def _process_loop(self) -> None:
         try:

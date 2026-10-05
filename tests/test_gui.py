@@ -35,6 +35,7 @@ def wait(app, cond, timeout=20):
 def test_drop_file_runs_job(qapp, video, fake_llm, monkeypatch, tmp_path):
     url, _ = fake_llm
     eng = FakeEngine()
+    monkeypatch.setattr(pipeline.models, "ensure_whisper", lambda m, *a, **k: m)
     monkeypatch.setattr(pipeline.ENGINES, "get", lambda *a, **k: eng)
     monkeypatch.setattr(pipeline.ENGINES, "release", lambda: None)
     from jpensubmaker.gui.app import MainWindow

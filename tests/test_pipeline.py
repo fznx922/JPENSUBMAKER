@@ -29,6 +29,7 @@ class FakeEngine:
 @pytest.fixture
 def engine(monkeypatch):
     eng = FakeEngine()
+    monkeypatch.setattr(pipeline.models, "ensure_whisper", lambda m, *a, **k: m)
     monkeypatch.setattr(pipeline.ENGINES, "get", lambda *a, **k: eng)
     monkeypatch.setattr(pipeline.ENGINES, "release", lambda: eng.close())
     return eng
@@ -74,13 +75,24 @@ def test_missing_file_fails_cleanly(tmp_path):
     assert job.status == "failed" and "not found" in job.error
 
 
-def test_missing_ollama_model_fails_before_transcribing(video, engine, fake_llm):
+def test_unknown_ollama_model_fails_before_transcribing(video, engine, fake_llm):
     url, _ = fake_llm
-    s = Settings(translator="ollama", llm_url=url, llm_model="not-pulled:7b")
+    s = Settings(translator="ollama", llm_url=url, llm_model="missing:7b")
     job = pipeline.run_job(pipeline.Job(str(video)), s, log=lambda m: None, progress=lambda f, m: None,
                            cancelled=lambda: False)
-    assert job.status == "failed" and "ollama pull not-pulled:7b" in job.error
+    assert job.status == "failed" and "does not exist" in job.error
     assert engine.calls == []
+
+
+def test_model_not_yet_pulled_is_downloaded(video, engine, fake_llm, tmp_path):
+    url, srv = fake_llm
+    s = Settings(translator="ollama", llm_url=url, llm_model="new-model:12b")
+    msgs = []
+    job = pipeline.run_job(pipeline.Job(str(video)), s, log=lambda m: None, progress=lambda f, m: msgs.append(m),
+                           cancelled=lambda: False)
+    assert job.status == "done", job.error
+    assert any(p == "/api/pull" for p, _ in srv.requests)
+    assert any("Downloading new-model:12b" in m for m in msgs)
 
 
 def test_translation_failure_keeps_japanese(video, engine, fake_llm, monkeypatch, tmp_path):

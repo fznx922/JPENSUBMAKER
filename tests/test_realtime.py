@@ -59,6 +59,8 @@ def test_live_translator_with_fake_engine(monkeypatch):
             return "Hello there." if task == "translate" else "こんにちは"
 
     monkeypatch.setattr(realtime, "make_engine", lambda *a, **k: Eng())
+    from jpensubmaker import pipeline
+    monkeypatch.setattr(pipeline.models, "ensure_whisper", lambda m, *a, **k: m)
     audio = np.concatenate([silence(0.5), tone(1.2), silence(1.0), tone(1.0), silence(1.0)])
     it = blocks(audio)
     caps, errors = [], []

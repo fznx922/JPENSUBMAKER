@@ -22,7 +22,10 @@ def prepare_cuda() -> None:
         return
     _prepared = True
     dirs: list[Path] = []
-    for p in map(Path, sys.path):
+    roots = list(sys.path)
+    if getattr(sys, "_MEIPASS", None):           # inside the packaged .exe
+        roots.insert(0, sys._MEIPASS)
+    for p in map(Path, roots):
         nv = p / "nvidia"
         if nv.is_dir():
             for sub in nv.iterdir():

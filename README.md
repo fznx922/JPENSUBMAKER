@@ -7,6 +7,16 @@ anime, games, calls — in a transparent, always-on-top window.
 Everything runs locally. It is built for an **RTX 3060 12 GB with 16 GB of RAM** and works on smaller or larger
 cards too (Settings → *Apply recommended settings* picks values for your GPU).
 
+## Download
+
+**[⬇ JPENSubMaker-Setup.exe](https://github.com/fznx922/JPENSUBMAKER/releases/latest/download/JPENSubMaker-Setup.exe)**
+— run it and you're done. No Python, no Ollama install, no command line.
+
+On first start the app picks settings for your graphics card and offers to download the AI models in one go
+(≈12 GB, once: the speech model, a private copy of the Ollama translation engine, and the translation model).
+Press *Later* and each one downloads the first time it is needed instead. If Ollama is already installed, the app
+uses it. A portable zip (no installer) is on the [releases page](https://github.com/fznx922/JPENSUBMAKER/releases/latest).
+
 ![Create subtitles](docs/create.png)
 
 | Live translator | Caption overlay |
@@ -63,19 +73,17 @@ the card (≤ 14B at 4-bit); bigger models spill into RAM and crawl.
 Live mode needs both at once, so its defaults are lighter: Whisper large-v3 in `int8_float16` (≈2.5 GB) with
 Whisper direct translate, or with a small LLM like `qwen3:4b` (≈3 GB) for better English at ~1 s more latency.
 
-## Install (Windows)
+## Install (Windows, from source)
+
+Only needed if you want to run or change the Python code — the installer above is the easy way.
 
 1. Install **Python 3.12** from [python.org](https://www.python.org/downloads/) (tick *Add python.exe to PATH*).
-   An up-to-date NVIDIA driver is all the GPU needs — the CUDA libraries come with the install.
-2. Download this repository (Code → Download ZIP, or `git clone`) and double-click **`install_windows.bat`**.
-3. For LLM translation, install **[Ollama](https://ollama.com)** and in a terminal run
-   ```
-   ollama pull gemma4:12b-it-qat
-   ollama pull qwen3:4b        # optional, for live LLM captions
-   ```
-4. Start the app with **`run_windows.bat`**. The first job downloads the speech model (≈3 GB) once.
+2. Double-click **`install_windows.bat`**, then start with **`run_windows.bat`**.
+3. Optional: **`install_qwen_windows.bat`** adds the Qwen3-ASR engine (PyTorch + ≈5 GB of models; not in the .exe).
 
-Optional: **`install_qwen_windows.bat`** adds the Qwen3-ASR engine (PyTorch + ≈5 GB of models on first use).
+To build the .exe yourself: `pip install pyinstaller`, `pyinstaller packaging/jpensubmaker.spec`, then compile
+`packaging/installer.iss` with [Inno Setup](https://jrsoftware.org/isinfo.php). GitHub Actions does exactly this on
+every push (`.github/workflows/windows-build.yml`) and attaches the result to the release.
 
 ## Install (Linux)
 
@@ -106,10 +114,13 @@ capture of system audio needs PipeWire or PulseAudio.
 
 - **"CUDA is not available"** — update the NVIDIA driver; re-run the installer (it installs cuBLAS/cuDNN 9 as pip
   packages). As a fallback set *Device* to CPU (slow: expect several × real time).
+- **Windows SmartScreen** says "unrecognised app" — the installer is not code-signed. Click *More info → Run
+  anyway*.
 - **Out of memory** — choose *int8_float16* precision, Kotoba-Whisper, or a smaller LLM; keep *VRAM saver* on; don't
   run live captions while a file job is running.
-- **"Ollama is not reachable"** — start Ollama (it runs in the tray) or check the URL in Settings; *Installed
-  models* lists what you have, *Test* translates two lines.
+- **Translator problems** — Settings → *Test* translates two lines and shows any error. The app's own Ollama
+  logs to `%LOCALAPPDATA%\JPENSubMaker\logs\ollama.log`. Models and the engine live in
+  `%LOCALAPPDATA%\JPENSubMaker` (uninstalling removes them).
 - **Repeated or invented lines over music** ("ご視聴ありがとうございました") — these well-known Whisper
   hallucinations are filtered; leave *voice activity detection* on.
 - **A link fails** — update yt-dlp: `.venv\Scripts\pip install -U yt-dlp`. Members-only or region-locked videos

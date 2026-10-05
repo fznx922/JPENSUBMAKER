@@ -37,6 +37,8 @@ ASR_MODELS: dict[str, str] = {
     "medium": "Whisper medium — light (≈1.5 GB)",
     "qwen3-asr": "Qwen3-ASR 1.7B + forced aligner — best Japanese accuracy (optional install, ≈5 GB)",
 }
+if getattr(sys, "frozen", False):          # the .exe ships without PyTorch, which Qwen3-ASR needs
+    ASR_MODELS.pop("qwen3-asr")
 
 # Translation backends.
 TRANSLATORS: dict[str, str] = {
@@ -78,6 +80,7 @@ class Settings:
     # --- translation
     translator: str = "ollama"
     llm_url: str = "http://127.0.0.1:11434"
+    ollama_auto: bool = True              # start Ollama, or download a private copy, when none is running
     llm_model: str = "gemma4:12b-it-qat"
     openai_url: str = "http://127.0.0.1:1234/v1"
     openai_model: str = ""
@@ -115,6 +118,7 @@ class Settings:
 
     # --- window
     window_geometry: list[int] = field(default_factory=list)
+    first_run_done: bool = False
 
     @property
     def effective_asr_model(self) -> str:

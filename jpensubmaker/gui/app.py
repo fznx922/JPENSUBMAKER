@@ -278,16 +278,11 @@ class Health(QObject):
             if not hardware.cuda_available():
                 notes.append(("warn", "CUDA is not available to the speech engine — check the NVIDIA driver, or set "
                                       "Device to CPU in Settings (much slower)."))
-        if s.translator == "ollama":
-            from ..translate import LLMClient, LLMConfig, TranslatorError
-            try:
-                models = LLMClient(LLMConfig(url=s.llm_url)).list_models()
-                if s.llm_model and not any(m == s.llm_model or m == s.llm_model + ":latest" for m in models):
-                    notes.append(("warn", f"Ollama is running but '{s.llm_model}' is not downloaded. "
-                                          f"Run: ollama pull {s.llm_model}"))
-            except TranslatorError:
-                notes.append(("warn", f"Ollama is not reachable at {s.llm_url}. Install it from ollama.com and "
-                                      f"run `ollama pull {s.llm_model}`, or pick “Whisper built-in translate”."))
+        if s.translator == "ollama" and not s.ollama_auto:
+            from .. import ollama_manager
+            if not ollama_manager.reachable(s.llm_url):
+                notes.append(("warn", f"Ollama is not reachable at {s.llm_url}. Start it, or turn on "
+                                      "“Set up Ollama automatically” in Settings."))
         if s.asr_model == "qwen3-asr" and not s.asr_custom_model:
             from ..asr import QwenEngine
             if not QwenEngine.available():
@@ -688,6 +683,9 @@ class SettingsPage(QWidget):
         preset = QPushButton("Apply recommended settings")
         preset.setObjectName("Primary")
         preset.clicked.connect(self._preset)
+        dl = QPushButton("Download models now")
+        dl.clicked.connect(lambda: self.main.open_setup(first_run=False))
+        hr.addWidget(dl, 0, Qt.AlignVCenter)
         hr.addWidget(preset, 0, Qt.AlignVCenter)
         cl.addLayout(hr)
         lay.addWidget(c)
@@ -714,7 +712,10 @@ class SettingsPage(QWidget):
         cl.addWidget(label("Translation", "SectionTitle"))
         g = make_grid()
         form_row(g, 0, "Translator", b.combo("translator", TRANSLATORS))
-        form_row(g, 1, "Ollama URL", b.line("llm_url", "http://127.0.0.1:11434"))
+        form_row(g, 1, "Ollama URL", b.line("llm_url", "http://127.0.0.1:11434"),
+                 "Used when an Ollama server is already running there.")
+        g.addWidget(b.check("ollama_auto", "Set up Ollama automatically (start it, or download a private copy, "
+                                           "and download models as needed)"), 10, 1)
         mr = QHBoxLayout()
         self.llm_combo = b.combo("llm_model", {m: m for m in LLM_SUGGESTIONS}, editable=True)
         mr.addWidget(self.llm_combo, 1)
@@ -782,16 +783,20 @@ class SettingsPage(QWidget):
             self.main.bind.set("output_dir", d)
 
     def _client(self):
+        from .. import ollama_manager
         from ..pipeline import llm_config
         from ..translate import LLMClient
-        return LLMClient(llm_config(self.main.settings))
+        s = self.main.settings
+        url = ollama_manager.current_url(s.llm_url) if s.translator != "openai" else None
+        return LLMClient(llm_config(s, url=url))
 
     def _list_models(self) -> None:
         from ..translate import TranslatorError
         try:
             models = self._client().list_models()
-        except TranslatorError as e:
-            self.test_result.setText(f'<span style="color:{theme.ERR}">{e}</span>')
+        except TranslatorError:
+            self.test_result.setText("Ollama is not running yet — it starts (or downloads) automatically on the "
+                                     "first job, or press “Download models now” above.")
             return
         cur = self.main.settings.llm_model
         self.llm_combo.blockSignals(True)
@@ -801,7 +806,7 @@ class SettingsPage(QWidget):
         self.llm_combo.setEditText(cur)
         self.llm_combo.blockSignals(False)
         self.test_result.setText(f"{len(models)} model(s) installed: {', '.join(models[:12])}" if models else
-                                 "No models installed yet — run `ollama pull gemma4:12b-it-qat`.")
+                                 "No models downloaded yet — they download automatically on first use.")
         self.llm_combo.showPopup()
 
     def _test_llm(self) -> None:
@@ -809,9 +814,13 @@ class SettingsPage(QWidget):
         client = self._client()
 
         def work():
+            from ..pipeline import prepare_llm
             from ..translate import TranslatorError
             t0 = time.time()
             try:
+                if self.main.settings.translator == "ollama":
+                    client.cfg.url = prepare_llm(self.main.settings, progress=lambda f, m: self.main.ui_call.emit(
+                        lambda m=m: self.test_result.setText(m)))
                 out = client.translate_lines(["お前はもう死んでいる。", "えっ、マジで？"])
                 msg = f"✔ {time.time() - t0:.1f}s · " + "  /  ".join(out)
                 color = theme.OK
@@ -1000,6 +1009,11 @@ class MainWindow(QMainWindow):
         self.tray.show()
         self._tray_menu = m
 
+    def open_setup(self, first_run: bool = False) -> None:
+        from .setup_dialog import SetupDialog
+        SetupDialog(self.settings.copy(), self, first_run=first_run).exec()
+        self.health.check(self.settings)
+
     def toast(self, text: str, ms: int = 2800) -> None:
         self._toast.setText(text)
         self._toast.adjustSize()
@@ -1170,6 +1184,8 @@ class MainWindow(QMainWindow):
         self.live.stop()
         self.overlay.close()
         self.queue.stop()
+        from .. import ollama_manager
+        ollama_manager.stop()                 # only stops a server this app started
         if self.tray:
             self.tray.hide()
         e.accept()
@@ -1191,8 +1207,17 @@ def run(initial: list[str] | None = None) -> int:
     app.setStyleSheet(theme.stylesheet())
     app.setWindowIcon(app_icon())
     s = Settings.load()
+    first = not s.first_run_done
+    if first:                                 # pick settings for this PC's GPU before anything is shown
+        gpus = hardware.detect_gpus()
+        for k, v in recommended(gpus[0].vram_gb if gpus else 0).items():
+            setattr(s, k, v)
+        s.first_run_done = True
+        s.save()
     w = MainWindow(s)
     w.show()
+    if first:
+        QTimer.singleShot(300, lambda: w.open_setup(first_run=True))
     if initial:
         QTimer.singleShot(200, lambda: w.add_sources(initial))
     return app.exec()

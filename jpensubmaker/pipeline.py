@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import download, media, subtitles
+from . import download, media, models, ollama_manager, subtitles
 from .asr import Cancelled, make_engine
 from .cues import Cue, build_cues
 from .settings import Settings
@@ -72,13 +72,13 @@ class EngineCache:
 ENGINES = EngineCache()
 
 
-def llm_config(s: Settings, live: bool = False) -> LLMConfig:
+def llm_config(s: Settings, live: bool = False, url: str | None = None) -> LLMConfig:
     backend = (s.live_translator if live else s.translator)
     if backend == "openai":
-        return LLMConfig(backend="openai", url=s.openai_url, model=s.openai_model, api_key=s.openai_api_key,
+        return LLMConfig(backend="openai", url=url or s.openai_url, model=s.openai_model, api_key=s.openai_api_key,
                          temperature=s.llm_temperature, keep_honorifics=s.keep_honorifics, context=s.context_prompt,
                          glossary=s.glossary, batch=s.llm_batch)
-    return LLMConfig(backend="ollama", url=s.llm_url, model=(s.live_llm_model if live else s.llm_model),
+    return LLMConfig(backend="ollama", url=url or s.llm_url, model=(s.live_llm_model if live else s.llm_model),
                      temperature=s.llm_temperature, keep_honorifics=s.keep_honorifics, context=s.context_prompt,
                      glossary=s.glossary, batch=s.llm_batch, keep_alive="30m" if live else "10m")
 
@@ -121,8 +121,19 @@ def run_job(job: Job, s: Settings, log: Callable[[str], None], progress: Progres
 
         if cancelled():
             raise Cancelled()
+        # models: downloaded on first use; the translator is checked now, not after an hour of transcription
+        p = stage(base_lo, base_lo + 0.08, "Preparing models")
+        llm_url = None
         if s.translator in ("ollama", "openai") and s.sub_mode != "ja":
-            preflight_llm(s)                      # fail now, not after twenty minutes of transcription
+            llm_url = prepare_llm(s, live=False, progress=lambda f, m: p(0.5 * f, m), cancelled=cancelled, log=log)
+        model = s.effective_asr_model
+        need_ja = s.sub_mode in ("ja", "bilingual") or s.translator in ("ollama", "openai", "none")
+        if need_ja or can_whisper_translate(model):
+            model_path = prepare_asr(model, progress=lambda f, m: p(0.5 + 0.5 * f, m), cancelled=cancelled)
+        else:
+            model_path = model                    # a transcribe-only model in Whisper-translate mode: not needed
+        base_lo += 0.08
+
         p = stage(base_lo, base_lo + 0.04, "Extracting audio")
         p(0.0, "Extracting audio…")
         audio = media.load_audio(job.media_path)
@@ -132,10 +143,8 @@ def run_job(job: Job, s: Settings, log: Callable[[str], None], progress: Progres
 
         # ---------------------------------------------------------------- 2. speech recognition
         asr_lo = base_lo + 0.04
-        need_ja = s.sub_mode in ("ja", "bilingual") or s.translator in ("ollama", "openai", "none")
         whisper_translate = s.translator == "whisper" and s.sub_mode != "ja"
         asr_hi = 0.95 if s.translator in ("whisper", "none") else 0.62
-        model = s.effective_asr_model
         prompt = s.context_prompt.strip()
 
         ja_cues: list[Cue] = []
@@ -144,7 +153,7 @@ def run_job(job: Job, s: Settings, log: Callable[[str], None], progress: Progres
         span = (asr_hi - asr_lo) / max(1, passes)
         lo = asr_lo
         if need_ja:
-            eng = ENGINES.get(model, s.device, s.compute_type, log)
+            eng = ENGINES.get(model_path, s.device, s.compute_type, log)
             p = stage(lo, lo + span, "Transcribing")
             p(0.0, "Loading speech model…")
             log(f"Transcribing Japanese with {model}…")
@@ -154,12 +163,12 @@ def run_job(job: Job, s: Settings, log: Callable[[str], None], progress: Progres
             log(f"Transcribed {len(ja_cues)} lines")
             lo += span
         if whisper_translate:
-            tr_model = model
-            eng = ENGINES.get(model, s.device, s.compute_type, log)
-            if not getattr(eng, "can_translate", False):
-                tr_model = "large-v3"
+            if can_whisper_translate(model):
+                eng = ENGINES.get(model_path, s.device, s.compute_type, log)
+            else:
                 log(f"{model} cannot translate; using Whisper large-v3 for the English pass")
-                eng = ENGINES.get(tr_model, s.device, s.compute_type, log)
+                tr_path = prepare_asr("large-v3", progress=lambda f, m: p(0.0, m), cancelled=cancelled)
+                eng = ENGINES.get(tr_path, s.device, s.compute_type, log)
             p = stage(lo, lo + span, "Translating (Whisper)")
             p(0.0, "Translating with Whisper…")
             segs = eng.transcribe(audio, task="translate", prompt="", beam_size=s.beam_size, vad=s.vad_filter,
@@ -174,7 +183,7 @@ def run_job(job: Job, s: Settings, log: Callable[[str], None], progress: Progres
         if s.translator in ("ollama", "openai") and s.sub_mode != "ja" and ja_cues:
             if s.vram_saver:
                 ENGINES.release()             # give the LLM the whole card
-            cfg = llm_config(s)
+            cfg = llm_config(s, url=llm_url)
             cfg.context = "; ".join(x for x in (job.title and f"title: {job.title}", s.context_prompt.strip()) if x)
             client = LLMClient(cfg, log=log)
             log(f"Translating {len(ja_cues)} lines with {cfg.model}…")
@@ -232,18 +241,39 @@ def run_job(job: Job, s: Settings, log: Callable[[str], None], progress: Progres
     return job
 
 
-def preflight_llm(s: Settings) -> None:
-    client = LLMClient(llm_config(s))
-    if s.translator == "openai":
+def can_whisper_translate(model: str) -> bool:
+    """Can this speech model do Whisper's built-in Japanese → English translation?"""
+    m = model.lower()
+    return not any(x in m for x in ("turbo", "kotoba", "distil", ".en", "qwen"))
+
+
+def prepare_asr(model: str, progress: ProgressFn | None = None, cancelled: Callable[[], bool] | None = None) -> str:
+    """The speech model as something the engine can load: a local folder (downloaded now if needed) or, for
+    Qwen3-ASR, its name (that engine downloads its own weights)."""
+    if model.lower() in ("qwen3-asr", "qwen", "qwen3"):
+        return model
+    return models.ensure_whisper(model, progress, cancelled)
+
+
+def prepare_llm(s: Settings, live: bool = False, progress: ProgressFn | None = None,
+                cancelled: Callable[[], bool] | None = None, log: Callable[[str], None] | None = None) -> str | None:
+    """Make the translator usable: start or install Ollama and pull the model if needed. Returns its URL."""
+    backend = s.live_translator if live else s.translator
+    if backend == "openai":
         if not s.openai_model.strip():
             raise TranslatorError("Set the model name for the OpenAI-compatible server in Settings")
-        return
-    models = client.list_models()            # raises TranslatorError if Ollama is not running
-    want = s.llm_model.strip()
-    if not want:
-        raise TranslatorError("No Ollama model selected")
-    if not any(m == want or m == want + ":latest" for m in models):
-        raise TranslatorError(f"Ollama does not have '{want}' yet. Open a terminal and run:  ollama pull {want}")
+        return s.openai_url
+    if backend != "ollama":
+        return None
+    model = (s.live_llm_model if live else s.llm_model).strip()
+    url = ollama_manager.ensure_server(s.llm_url, s.ollama_auto,
+                                       progress=(lambda f, m: progress(0.4 * f, m)) if progress else None,
+                                       cancelled=cancelled)
+    if log and url != s.llm_url:
+        log(f"Using the app's own Ollama at {url}")
+    ollama_manager.ensure_model(url, model, progress=(lambda f, m: progress(0.4 + 0.6 * f, m)) if progress else None,
+                                cancelled=cancelled)
+    return url
 
 
 def output_base(job: Job, s: Settings) -> Path:
