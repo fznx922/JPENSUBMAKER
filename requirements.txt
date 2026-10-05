@@ -1,0 +1,12 @@
+# JPEN SubMaker — core requirements (Windows / Linux, Python 3.10–3.12 recommended)
+PySide6>=6.6
+faster-whisper>=1.1.1
+numpy>=1.24
+requests>=2.31
+yt-dlp>=2025.1.1
+soundcard>=0.4.3
+# a static ffmpeg for systems without one on PATH (most Windows installs)
+imageio-ffmpeg>=0.5
+# CUDA 12 runtime libraries for faster-whisper / CTranslate2 (no CUDA toolkit install needed)
+nvidia-cublas-cu12; sys_platform != "darwin"
+nvidia-cudnn-cu12>=9,<10; sys_platform != "darwin"
