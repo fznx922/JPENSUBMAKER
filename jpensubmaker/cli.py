@@ -81,8 +81,15 @@ def selftest() -> int:
         return requests.get("https://huggingface.co/api/models/Systran/faster-whisper-large-v3", timeout=20).status_code
 
     def audio():
+        import threading
         from .realtime import _soundcard, list_devices
         _soundcard()                                      # raises if the capture backend cannot load
+        err = []                                          # …and again from a second thread, as live mode does
+        t = threading.Thread(target=lambda: err.append(None) if _soundcard() else None)
+        t.start()
+        t.join()
+        if not err:
+            raise RuntimeError("audio backend failed in a worker thread")
         return f"{len(list_devices('loopback'))} loopback / {len(list_devices('mic'))} mic devices"
 
     check("gui", qt)

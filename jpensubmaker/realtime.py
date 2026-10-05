@@ -48,7 +48,10 @@ def _com_init() -> None:
 
 
 def _soundcard():
-    _com_init()
+    # soundcard initialises COM itself on the thread that imports it — and treats "already initialised" as an
+    # error — so only threads that come after the import get their own CoInitializeEx.
+    if "soundcard" in sys.modules:
+        _com_init()
     try:
         import soundcard as sc
     except Exception as e:  # noqa: BLE001 — no PulseAudio server, missing libs, …
