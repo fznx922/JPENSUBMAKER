@@ -1,4 +1,4 @@
 """JPEN SubMaker — Japanese → English subtitles from video files, links, or live system audio."""
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 APP_NAME = "JPEN SubMaker"

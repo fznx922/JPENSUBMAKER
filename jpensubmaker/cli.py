@@ -19,6 +19,12 @@ def _quiet_streams() -> None:
         f = open(logs_dir() / "app.log", "a", encoding="utf-8", buffering=1)
         sys.stdout = sys.stdout or f
         sys.stderr = sys.stderr or f
+    # Windows consoles default to a legacy code page; Japanese/Russian titles would raise UnicodeEncodeError
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
 
 
 def selftest() -> int:
