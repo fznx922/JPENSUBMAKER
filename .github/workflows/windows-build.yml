@@ -50,6 +50,15 @@ jobs:
       - name: Self-test the packaged app
         run: dist\JPENSubMaker\jpensub-cli.exe --selftest
 
+      - name: Link sites check (YouTube-style sites can block CI; informational)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          foreach ($u in @("https://ok.ru/video/1484130554189", "https://www.dailymotion.com/video/x5kesuj")) {
+            Write-Host "== $u"
+            dist\JPENSubMaker\jpensub-cli.exe --probe-link $u
+          }
+
       - name: Build installer (Inno Setup)
         shell: pwsh
         env:

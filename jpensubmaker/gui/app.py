@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
                                QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__, hardware
-from ..download import is_url
+from ..download import COOKIE_BROWSERS, normalize_url
 from ..media import is_media
 from ..pipeline import Job
 from ..realtime import Caption, list_devices
@@ -319,7 +319,7 @@ class CreatePage(QWidget):
         row.setSpacing(10)
         self.url = QLineEdit()
         self.url.setObjectName("UrlInput")
-        self.url.setPlaceholderText("Paste a YouTube, Dailymotion, Niconico, Bilibili … link (several at once is fine)")
+        self.url.setPlaceholderText("Paste a YouTube, Dailymotion, OK.ru, Niconico, Bilibili … link (several at once is fine)")
         self.url.addAction(icon("link", theme.MUTED, 18), QLineEdit.LeadingPosition)
         self.url.returnPressed.connect(self._add_urls)
         row.addWidget(self.url, 1)
@@ -399,8 +399,8 @@ class CreatePage(QWidget):
 
     def _add_urls(self) -> None:
         items = [t for t in self.url.text().split() if t.strip()]
-        bad = [t for t in items if not is_url(t)]
-        good = [t for t in items if is_url(t)]
+        bad = [t for t in items if not normalize_url(t)]
+        good = [normalize_url(t) for t in items if normalize_url(t)]
         if good:
             self.main.add_sources(good)
             self.url.clear()
@@ -768,7 +768,36 @@ class SettingsPage(QWidget):
         g.addWidget(b.check("vram_saver", "VRAM saver: unload the speech model before translating (needed on ≤ 16 GB)"), 6, 1)
         cl.addLayout(g)
         lay.addWidget(c)
+
+        # --- links
+        c, cl = card()
+        cl.addWidget(label("Links", "SectionTitle"))
+        cl.addWidget(label("YouTube, Dailymotion, OK.ru, Niconico, Bilibili, TVer, X and ~1,800 other sites work out of "
+                           "the box. Some videos need you to be signed in (private or adult-flagged OK.ru videos, "
+                           "age-restricted YouTube); for those, sign in on the site in your browser and pick it here.",
+                           "Faint", wrap=True))
+        g = make_grid()
+        browsers = {"": "Nobody — don't use sign-in cookies"}
+        browsers.update({x: x.capitalize() for x in COOKIE_BROWSERS})
+        form_row(g, 0, "Use sign-in from", b.combo("cookies_browser", browsers),
+                 "Firefox is the most reliable. Chrome/Edge may need to be closed while downloading.")
+        crow = QHBoxLayout()
+        crow.setContentsMargins(0, 0, 0, 0)
+        crow.addWidget(b.line("cookies_file", "optional: a cookies.txt exported with a browser extension"), 1)
+        cb = QPushButton("Browse…")
+        cb.clicked.connect(self._browse_cookies)
+        crow.addWidget(cb)
+        w = QWidget()
+        w.setLayout(crow)
+        form_row(g, 1, "Cookies file", w, "Used instead of the browser when set.")
+        cl.addLayout(g)
+        lay.addWidget(c)
         lay.addStretch(1)
+
+    def _browse_cookies(self) -> None:
+        f, _ = QFileDialog.getOpenFileName(self, "cookies.txt", "", "Cookies (*.txt);;All files (*)")
+        if f:
+            self.main.bind.set("cookies_file", f)
 
     def _preset(self) -> None:
         gpus = hardware.detect_gpus()
@@ -1030,11 +1059,12 @@ class MainWindow(QMainWindow):
     def add_sources(self, items: list[str]) -> None:
         added = 0
         for it in items:
-            if is_url(it):
-                self._add_job(Job(it.strip()))
+            p = Path(it)
+            link = None if p.exists() else normalize_url(it)
+            if link:
+                self._add_job(Job(link))
                 added += 1
                 continue
-            p = Path(it)
             if p.is_dir():
                 files = [f for f in sorted(p.rglob("*")) if f.is_file() and is_media(f)]
                 for f in files:
@@ -1101,7 +1131,7 @@ class MainWindow(QMainWindow):
             fw.paste()
             return
         text = QGuiApplication.clipboard().text().strip()
-        links = [t for t in text.split() if is_url(t)]
+        links = [normalize_url(t) for t in text.split() if normalize_url(t)]
         if links:
             self.add_sources(links)
         else:

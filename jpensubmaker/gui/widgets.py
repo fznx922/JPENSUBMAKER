@@ -8,7 +8,7 @@ from PySide6.QtGui import QColor, QDesktopServices, QLinearGradient, QPainter, Q
 from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QProgressBar, QSizePolicy,
                                QToolButton, QVBoxLayout, QWidget)
 
-from ..download import is_url
+from ..download import normalize_url
 from ..media import MEDIA_EXTS, VIDEO_EXTS
 from . import theme
 from .icons import icon, pixmap
@@ -80,7 +80,7 @@ class DropZone(QWidget):
 
     def dragEnterEvent(self, e):
         md = e.mimeData()
-        if md.hasUrls() or (md.hasText() and is_url(md.text().strip().split()[0] if md.text().strip() else "")):
+        if md.hasUrls() or (md.hasText() and md.text().strip() and normalize_url(md.text().strip().split()[0])):
             e.acceptProposedAction()
             self._drag = True
             self.update()
@@ -101,7 +101,7 @@ class DropZone(QWidget):
                 elif u.scheme() in ("http", "https"):
                     items.append(u.toString())
         elif md.hasText():
-            items = [t for t in md.text().split() if is_url(t)]
+            items = [normalize_url(t) for t in md.text().split() if normalize_url(t)]
         if items:
             e.acceptProposedAction()
             self.dropped.emit(items)

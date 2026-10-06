@@ -27,8 +27,9 @@ uses it. A portable zip (no installer) is on the [releases page](https://github.
 
 - **Drag and drop** files or whole folders (MP4, MKV, AVI, MOV, WEBM, TS, MP3, FLAC… anything ffmpeg reads), or
   click to browse. Jobs queue up and run one after another, with progress, cancel and retry.
-- **Links**: YouTube, Dailymotion, Niconico, Bilibili, TVer, X/Twitter and the ~1,800 other sites yt-dlp
-  supports. Paste several at once. The video (≤1080p) is kept with its subtitles beside it, so any player loads
+- **Links**: YouTube, Dailymotion, OK.ru, Niconico, Bilibili, TVer, X/Twitter and the ~1,800 other sites
+  yt-dlp supports (links without `https://` are fine too). Videos that need an account can use your browser's
+  sign-in (Settings → Links). Paste several at once. The video (≤1080p) is kept with its subtitles beside it, so any player loads
   them — or choose audio-only in Settings.
 - **Subtitles**: English, English + Japanese (bilingual), or Japanese only, as **SRT**, **ASS** (styled; the
   Japanese sits at the top of the frame in bilingual mode) and **VTT**. Files are named `Video.en.srt` so VLC,
@@ -123,8 +124,9 @@ capture of system audio needs PipeWire or PulseAudio.
   `%LOCALAPPDATA%\JPENSubMaker` (uninstalling removes them).
 - **Repeated or invented lines over music** ("ご視聴ありがとうございました") — these well-known Whisper
   hallucinations are filtered; leave *voice activity detection* on.
-- **A link fails** — update yt-dlp: `.venv\Scripts\pip install -U yt-dlp`. Members-only or region-locked videos
-  need cookies, which this app does not handle.
+- **A link fails** — the card says why. *Needs a signed-in account* (common on OK.ru): sign in on the site in
+  your browser and pick that browser in Settings → Links (Firefox works best; or export a cookies.txt). *Blocked in
+  your country*: the site refuses your region. Sites change often; a new release brings the latest downloader.
 
 ## Project layout
 

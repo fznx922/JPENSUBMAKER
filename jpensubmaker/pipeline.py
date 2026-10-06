@@ -107,7 +107,8 @@ def run_job(job: Job, s: Settings, log: Callable[[str], None], progress: Progres
             else:
                 tmp_dir = tempfile.TemporaryDirectory(prefix="jpensub_")
                 dest = Path(tmp_dir.name)
-            got = download.fetch(job.source, dest, keep_video=s.url_keep_video, progress=p, cancelled=cancelled)
+            got = download.fetch(job.source, dest, keep_video=s.url_keep_video, progress=p, cancelled=cancelled,
+                                 cookies_browser=s.cookies_browser, cookies_file=s.cookies_file)
             job.media_path = got.path
             job.title = got.title
             log(f"Downloaded: {got.path.name}")

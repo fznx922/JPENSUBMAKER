@@ -96,6 +96,8 @@ class Settings:
     save_next_to_video: bool = True
     output_dir: str = field(default_factory=default_output_dir)
     url_keep_video: bool = True           # links: keep the downloaded video (≤1080p) beside the subtitles
+    cookies_browser: str = ""             # links: borrow sign-in cookies from this browser ("" = none)
+    cookies_file: str = ""                # links: or from an exported cookies.txt
     max_line_chars: int = 42
     vram_saver: bool = True               # unload the ASR model before translating and the LLM after (12 GB cards)
 
